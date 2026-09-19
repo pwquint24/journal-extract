@@ -1,11 +1,12 @@
-* journal-extract
+* Journal Extract
 
-An Emacs Lisp utility that reads a single org-mode "journal" file and moves
-its tagged entries out into one file per tag.
+An Emacs Lisp utility that reads a single org-mode "journal" file and moves its tagged entries out into one file per tag.
 
 Each date entry in the journal is examined for tags. For every tag found, the
 entry's content is appended to a file named after that tag (for example
-=Marlowe.org=), so related notes naturally accumulate into topic files.
+=MytopicA.org=), so related notes naturally accumulate into topic files.
+
+Vibe coded with DeepSeek
 
 ** How it works
 
@@ -16,35 +17,35 @@ Given a journal like this:
 
 ** 2026-09-18 Fri 16:50
 
-*** Some more text with something else special          :ArtHist:
+*** Some more text with something else           :MyTopicA:
 And in this case, we can add some notes as well ...
 
-**** Let's talk about this
+**** SubHeading
 
-**** And some more
+**** Another SubHeading
 #+END_SRC
 
-=journal-extract= produces an =ArtHist.org=:
+=journal-extract= produces an =MyTopicA.org=:
 
 #+BEGIN_SRC org
-* ArtHist
+* MyTopicA
 
-** Some more text with something else special
+** Some more text with something else
 And in this case, we can add some notes as well ...
 
-*** Let's talk about this
+*** SubHeading
 
-*** And some more
+*** Another SubHeading
 #+END_SRC
 
 Notice what happened:
 
 - The file was *created* with a top-level heading named after the tag
-  (=* ArtHist=).
+  (=* MyTopicA=).
 - The date heading (=** 2026-09-18 Fri 16:50=) was *not* copied.
 - Every heading was *outdented one level* (because the =**= date heading was
   removed): =***= -> =**=, =****= -> =***=.
-- The =:ArtHist:= tag was *stripped* from the moved content, since the file's
+- The =:MyTopicA:= tag was *stripped* from the moved content, since the file's
   own top heading already tells you the category.
 
 Back in the source journal, the processed entry is marked so it won't be
@@ -98,18 +99,14 @@ Then run:
 doom sync
 #+END_SRC
 
-After syncing, configure it in your =config.el= (=~/.config/doom/config.el=
-or =~/.doom.d/config.el=) with =use-package!=:
+After syncing, use it in your config:
 
 #+BEGIN_SRC elisp
 (use-package! journal-extract
-  :config
-  (setq journal-extract-input-file "~/notes/journals.org")
-  (setq journal-extract-target-directory "~/notes/topics/"))
-#+END_SRC
+     :config
+     (setq journal-extract-input-file "~/notes/journals.org")
+     (setq journal-extract-target-directory "~/notes/topics/"))#+END_SRC
 
-This assumes =journal-extract.el= lives at the repository root. The =test/=
-directory is not installed as part of the package.
 
 ** Usage
 
@@ -174,17 +171,16 @@ after an entry has been processed. Add your own tags here if needed:
 
 ** Input file format
 
-- The journal should have one top-level heading (for example =* Journal=).
-  This is left untouched.
-- Date entries are the headings at =journal-extract-entry-level= (level 2 by
-  default) whose title *starts with a digit*, e.g. =** 2026-09-18 Fri 16:50=.
-- Content (notes) lives beneath each date entry at deeper levels. Tags are
-  placed on any of these content headings:
+- The journal should have one top-level heading (for example =* Journal=). This is left untouched.
+
+- Date entries are the headings at =journal-extract-entry-level= (level 2 by default) whose title *starts with a digit*, e.g. =** 2026-09-18 Fri 16:50=.
+
+- Content (notes) lives beneath each date entry at deeper levels. Tags are placed on any of these content headings:
 
 #+BEGIN_SRC org
 * Journal
 ** 2026-09-18 Fri 16:50
-*** A note about art history          :ArtHist:
+*** A note about this :MyTopicA:
 **** A sub-point
 #+END_SRC
 
