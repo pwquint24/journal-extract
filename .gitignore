@@ -1,0 +1,15 @@
+# Real journal file (personal data; not committed).
+# The committed example fixture lives at test/test-data/journals.org.
+/journals.org
+
+# Generated per-tag files, written next to the input file by journal-extract.
+
+
+# Byte-compiled Emacs Lisp.
+*.elc
+
+# Emacs backup, autosave, and lock files.
+*~
+\#*\#
+.\#*
+/.projectile

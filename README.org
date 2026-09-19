@@ -1,0 +1,232 @@
+* journal-extract
+
+An Emacs Lisp utility that reads a single org-mode "journal" file and moves
+its tagged entries out into one file per tag.
+
+Each date entry in the journal is examined for tags. For every tag found, the
+entry's content is appended to a file named after that tag (for example
+=Marlowe.org=), so related notes naturally accumulate into topic files.
+
+** How it works
+
+Given a journal like this:
+
+#+BEGIN_SRC org
+* Journal
+
+** 2026-09-18 Fri 16:50
+
+*** Some more text with something else special          :ArtHist:
+And in this case, we can add some notes as well ...
+
+**** Let's talk about this
+
+**** And some more
+#+END_SRC
+
+=journal-extract= produces an =ArtHist.org=:
+
+#+BEGIN_SRC org
+* ArtHist
+
+** Some more text with something else special
+And in this case, we can add some notes as well ...
+
+*** Let's talk about this
+
+*** And some more
+#+END_SRC
+
+Notice what happened:
+
+- The file was *created* with a top-level heading named after the tag
+  (=* ArtHist=).
+- The date heading (=** 2026-09-18 Fri 16:50=) was *not* copied.
+- Every heading was *outdented one level* (because the =**= date heading was
+  removed): =***= -> =**=, =****= -> =***=.
+- The =:ArtHist:= tag was *stripped* from the moved content, since the file's
+  own top heading already tells you the category.
+
+Back in the source journal, the processed entry is marked so it won't be
+moved again:
+
+#+BEGIN_SRC org
+** 2026-09-18 Fri 16:50 :copied:
+#+END_SRC
+
+** Requirements
+
+- GNU Emacs (any reasonably recent version; tested with Emacs 31.1).
+- Org mode (bundled with Emacs).
+
+** Installation
+
+Only =journal-extract.el= is needed to install and use the package. The
+=test/= directory is for development only and is not installed.
+
+*** Manual
+
+Load the file into Emacs:
+
+#+BEGIN_SRC elisp
+(load-file "/path/to/journal-extract.el")
+#+END_SRC
+
+You can also add it to your init file:
+
+#+BEGIN_SRC elisp
+(add-to-list 'load-path "/path/to/journal-extract/")
+(require 'journal-extract)
+#+END_SRC
+
+*** Doom Emacs
+
+In your =packages.el= (usually =~/.config/doom/packages.el= or
+=~/.doom.d/packages.el=), declare the package with a =:recipe= pointing at the
+Git repository:
+
+#+BEGIN_SRC elisp
+;;; ~/.config/doom/packages.el
+(package! journal-extract
+  :recipe (:host github
+            :repo "pwquint24/journal-extract"))
+#+END_SRC
+
+Then run:
+
+#+BEGIN_SRC sh
+doom sync
+#+END_SRC
+
+After syncing, configure it in your =config.el= (=~/.config/doom/config.el=
+or =~/.doom.d/config.el=) with =use-package!=:
+
+#+BEGIN_SRC elisp
+(use-package! journal-extract
+  :config
+  (setq journal-extract-input-file "~/notes/journals.org")
+  (setq journal-extract-target-directory "~/notes/topics/"))
+#+END_SRC
+
+This assumes =journal-extract.el= lives at the repository root. The =test/=
+directory is not installed as part of the package.
+
+** Usage
+
+*** Interactively
+
+Run =M-x journal-extract RET=. If you haven't set the input file and target
+directory (see below), it will prompt for them.
+
+*** From Lisp
+
+#+BEGIN_SRC elisp
+(journal-extract "/path/to/journals.org" "/path/to/output-directory/")
+#+END_SRC
+
+Both arguments are optional and can be omitted if you use the configuration
+variables instead.
+
+** Configuration
+
+All options are =defcustom=s, so you can set them with =M-x customize-group RET
+journal-extract RET=, or in your init file.
+
+*** =journal-extract-input-file=
+
+Default input journal file. When =nil= (the default), =journal-extract=
+prompts interactively, or you must pass the file as an argument.
+
+#+BEGIN_SRC elisp
+(setq journal-extract-input-file "~/notes/journals.org")
+#+END_SRC
+
+*** =journal-extract-target-directory=
+
+Directory that receives the per-tag files. When =nil= (the default), files are
+created next to the input file.
+
+#+BEGIN_SRC elisp
+(setq journal-extract-target-directory "~/notes/topics/")
+#+END_SRC
+
+*** =journal-extract-entry-level=
+
+The heading level at which date entries live. Defaults to =2=.
+
+#+BEGIN_SRC elisp
+(setq journal-extract-entry-level 2)
+#+END_SRC
+
+*** =journal-extract-ignored-tags=
+
+A list of tags to ignore. Two effects:
+
+1. A date entry that already carries one of these tags is *skipped*.
+2. These tags are *never exported* to their own file.
+
+Defaults to =("copied")=, which is the marker =journal-extract= itself adds
+after an entry has been processed. Add your own tags here if needed:
+
+#+BEGIN_SRC elisp
+(setq journal-extract-ignored-tags '("copied" "private"))
+#+END_SRC
+
+** Input file format
+
+- The journal should have one top-level heading (for example =* Journal=).
+  This is left untouched.
+- Date entries are the headings at =journal-extract-entry-level= (level 2 by
+  default) whose title *starts with a digit*, e.g. =** 2026-09-18 Fri 16:50=.
+- Content (notes) lives beneath each date entry at deeper levels. Tags are
+  placed on any of these content headings:
+
+#+BEGIN_SRC org
+* Journal
+** 2026-09-18 Fri 16:50
+*** A note about art history          :ArtHist:
+**** A sub-point
+#+END_SRC
+
+** Behaviour details
+
+- *Tag collection.* All tags in the entry's subtree are collected — from the
+  date heading itself and all descendant headings and items — excluding the
+  tags in =journal-extract-ignored-tags=.
+- *Multiple tags.* If an entry has more than one tag, the whole block is
+  copied to /each/ tag's file.
+- *Order.* Within each tag file, entries keep their original document order.
+- *Idempotency.* Processed entries are tagged =:copied:= and skipped on later
+  runs, so re-running the command is safe and makes no changes.
+- *Untagged entries.* A date entry with no tags is left in place and is not
+  marked =:copied:=, so you can tag it later and run the command again.
+
+** Example session
+
+#+BEGIN_SRC elisp
+;; One-time setup.
+(add-to-list 'load-path "~/journal-extract/")
+(require 'journal-extract)
+(setq journal-extract-input-file "~/notes/journals.org")
+(setq journal-extract-target-directory "~/notes/topics/")
+
+;; Run it.
+(journal-extract)
+#+END_SRC
+
+After running, =~/notes/topics/= will contain one org file per tag (created
+as needed), and processed entries in =journals.org= will be marked =:copied:=.
+
+** Testing
+
+The test suite uses ERT (Emacs Lisp Regression Testing) and lives in the
+=test/= directory, together with a fake =test-data/journals.org= fixture.
+
+Run it from the =journal-extract/= directory:
+
+#+BEGIN_SRC sh
+emacs --batch -l test/journal-extract-tests.el -f ert-run-tests-batch-and-exit
+#+END_SRC
+
+The tests copy the fixture to a temporary directory, so your real journal
+file is never touched.
