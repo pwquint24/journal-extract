@@ -1,0 +1,493 @@
+#+title: Journal Extract — Literate Implementation & Architecture
+#+author: Andrew Patrick
+#+property: header-args:emacs-lisp :tangle journal-extract-tangled.el :comments link :mkdirp yes
+
+* Overview & Architecture
+
+~journal-extract~ is an Emacs Lisp package designed to solve a fundamental tension in personal knowledge management: the trade-off between *chronological journaling* and *topical note organization*.
+
+** The Problem
+
+When taking daily notes, a linear, chronological journal is low-friction: you open today's date, jot down thoughts, ideas, work logs, or reading notes, and tag them (e.g., =:ArtHist:=, =:ProjectX:=).
+
+However, over months or years, notes on a single topic become scattered across hundreds of daily entries. Finding all notes about /Art History/ requires running searches or agenda tag matches across a massive file.
+
+** The Solution
+
+~journal-extract~ automates the extraction of tagged sections from a central journal file into dedicated, per-topic Org files (such as =ArtHist.org=, =ProjectX.org=).
+
+#+begin_example
+  Input Journal (journals.org)
+  * Journal
+  ** 2026-09-18 Fri 16:50
+  *** Baroque Painting Notes   :ArtHist:
+  Some discussion on Caravaggio...
+  **** Chiaroscuro techniques
+
+                      │
+                      ▼  M-x journal-extract
+                      │
+  Target Directory (ArtHist.org)
+  * ArtHist
+
+  ** Baroque Painting Notes
+  Some discussion on Caravaggio...
+  *** Chiaroscuro techniques
+#+end_example
+
+Key operational characteristics:
+1. *Outdenting*: The level-2 date header (=** 2026-09-18 Fri 16:50=) is discarded; all children are shifted up one level (=***= becomes =**=, =****= becomes =***=).
+2. *Tag Stripping*: The topic tag (=:ArtHist:=) is removed from extracted headlines because the target file itself encapsulates that topic.
+3. *Top-level Topic Headline*: If a target tag file does not exist, it is initialized with a level-1 headline (=* ArtHist=).
+4. *Source Tracking & Idempotency*: Once extracted, the date header in the journal is tagged with =:copied:=. Subsequent runs skip already-copied entries.
+5. *AST-Driven Transformation*: Instead of using error-prone regular expressions or string slicing, parsing and manipulation are performed on the Org Abstract Syntax Tree using ~org-element~.
+
+* Package Header & Lexical Binding
+
+Every modern Emacs Lisp package begins with standard package headers. Lexical binding is enabled via the file-local variable in the very first line.
+
+#+begin_src emacs-lisp
+;;; journal-extract.el --- Extract tagged journal entries into per-tag org files -*- lexical-binding: t; -*-
+#+end_src
+
+** Why Lexical Binding Matters
+With ~lexical-binding: t~:
+- Variables declared in ~let~, ~dolist~, and ~cl-labels~ have lexical scope, avoiding unintended namespace pollution.
+- Closures created in helper functions (e.g., in ~cl-labels~ within ~journal-extract--collect-tags~) capture their surrounding environment cleanly and execute significantly faster than dynamically scoped functions.
+
+* Package Commentary
+
+The commentary section explains the structure of the input file and the five-step transformation pipeline to users viewing the file with ~describe-package~ or inside the source.
+
+#+begin_src emacs-lisp
+;;; Commentary:
+
+;; Scans an org-mode "journal" file and moves tagged date entries out
+;; into one file per tag.
+;;
+;; Structure of the input file:
+;;
+;;   * Journal                          ; level 1, ignored
+;;   ** 2026-09-18 Fri 16:50            ; level 2 = a "date entry"
+;;   *** Some note ...        :ArtHist: ; content, tags live here
+;;   **** A deeper note ...
+;;
+;; For each date entry (a level-2 heading whose title starts with a
+;; digit):
+;;
+;;   1. Skip it if it already carries an ignored tag (`:copied:` by
+;;      default).
+;;   2. Collect every tag found in the entry's subtree (the date
+;;      heading itself plus all descendant headlines and items),
+;;      excluding ignored tags.
+;;   3. For each collected tag, append the whole block (everything
+;;      under the date heading, minus the date heading itself) to
+;;      <TAG>.org in the target directory.  New files start with a
+;;      top-level `* TAG' heading.
+;;   4. Outdent the moved headings by one level, since the `**` date
+;;      heading has been removed (`***` -> `**`, `****` -> `***`), and
+;;      strip their tags (the file's `* TAG' heading conveys the
+;;      category).
+;;   5. Tag the date heading `:copied:` so later runs skip it.
+#+end_src
+
+* Dependencies
+
+The package relies on four standard libraries:
+
+#+begin_src emacs-lisp
+;;; Code:
+
+(require 'cl-lib)
+(require 'subr-x)
+(require 'org)
+(require 'org-element)
+#+end_src
+
+- *~cl-lib~*: Provides Common Lisp extensions, specifically ~cl-labels~ (for defining lexically scoped local recursive functions) and ~cl-some~ (for predicate evaluation across collections).
+- *~subr-x~*: Provides string manipulation utilities such as ~string-trim~, ~string-trim-right~, and ~string-empty-p~.
+- *~org~*: Provides Org Mode core commands, headline tag inspection (~org-get-tags~), and tag mutation (~org-set-tags~).
+- *~org-element~*: Org Mode's formal syntax parser. It builds the AST (~org-element-parse-buffer~), maps nodes (~org-element-map~), accesses and modifies properties (~org-element-property~, ~org-element-put-property~), and converts AST structures back into serialized Org text (~org-element-interpret-data~).
+
+* Customization Group & User Options
+
+Configuration variables are exposed through Emacs's ~defcustom~ facility under the ~journal-extract~ group.
+
+#+begin_src emacs-lisp
+(defgroup journal-extract nil
+  "Extract tagged journal entries into per-tag org files."
+  :group 'org)
+
+(defcustom journal-extract-input-file nil
+  "Default input org file for `journal-extract'.
+When nil, `journal-extract' prompts for the file interactively, or the
+file must be supplied as an argument."
+  :type '(choice (const :tag "Prompt each time" nil)
+                 (file :tag "Input file")))
+
+(defcustom journal-extract-target-directory nil
+  "Default output directory for the per-tag org files.
+When nil, the directory containing the input file is used."
+  :type '(choice (const :tag "Input file's directory" nil)
+                 (directory :tag "Output directory")))
+
+(defcustom journal-extract-entry-level 2
+  "Heading level at which date entries live."
+  :type 'integer)
+
+(defcustom journal-extract-ignored-tags '("copied")
+  "List of tags to ignore.
+A date entry is skipped if it already carries one of these tags, and
+these tags are never exported to their own file."
+  :type '(repeat string))
+#+end_src
+
+** Configuration Mechanics
+- *~journal-extract-input-file~*: When set to a file path (e.g. =~/.org/journal.org=), users do not need to select their journal path on each invocation.
+- *~journal-extract-target-directory~*: Specifies where topic files (e.g. =ArtHist.org=) will be written. If nil, defaults to the directory containing the input journal.
+- *~journal-extract-entry-level~*: Defaults to =2=, assuming =* Journal= is level 1 and =** YYYY-MM-DD...= entries are level 2. Can be customized if a user uses deeper or shallower hierarchies.
+- *~journal-extract-ignored-tags~*: A list of tags that should neither trigger file generation nor be preserved. Defaults to ='("copied")=.
+
+* Ignored Tag Predicates
+
+Two helper predicates determine if a tag or list of tags should be skipped during processing.
+
+#+begin_src emacs-lisp
+(defun journal-extract--ignored-tag-p (tag)
+  "Return non-nil if TAG is in `journal-extract-ignored-tags'."
+  (member tag journal-extract-ignored-tags))
+
+(defun journal-extract--ignored-p (tags)
+  "Return non-nil if TAGS contains an ignored tag."
+  (cl-some #'journal-extract--ignored-tag-p tags))
+#+end_src
+
+** How They Work
+- *~journal-extract--ignored-tag-p~*: Takes a single tag string and checks membership in ~journal-extract-ignored-tags~ using ~member~ (which compares strings with ~equal~ in Emacs Lisp).
+- *~journal-extract--ignored-p~*: Takes a list of tags associated with a headline (e.g. ~'("work" "copied")~) and tests whether any tag satisfies ~journal-extract--ignored-tag-p~. It short-circuits as soon as a match is found via ~cl-some~.
+
+* Subtree Tag Collection
+
+To determine which destination files a journal entry belongs to, all tags within the entry's subtree must be discovered and deduplicated.
+
+#+begin_src emacs-lisp
+(defun journal-extract--collect-tags (headline)
+  "Collect distinct tags in HEADLINE's subtree.
+Includes HEADLINE's own tags and all descendant headlines and items,
+excluding any tag in `journal-extract-ignored-tags'."
+  (let (result)
+    (cl-labels ((collect (tags)
+                  (dolist (tag tags)
+                    (unless (or (member tag result)
+                                (journal-extract--ignored-tag-p tag))
+                      (push tag result))))
+                (walk (el)
+                  (when (memq (org-element-type el) '(headline item))
+                    (collect (org-element-property :tags el)))
+                  (dolist (child (org-element-contents el))
+                    (walk child))))
+      (collect (org-element-property :tags headline))
+      (dolist (child (org-element-contents headline))
+        (walk child)))
+    (nreverse result)))
+#+end_src
+
+** How It Works in Detail
+1. *Local Recursive Helpers (~cl-labels~)*:
+   - ~collect~: Iterates over a given list of tags. For each tag, it checks two conditions:
+     1. Is it already in ~result~?
+     2. Is it marked as ignored by ~journal-extract--ignored-tag-p~?
+     If neither holds, it pushes the tag onto ~result~.
+   - ~walk~: Inspects an Org AST element ~el~. If ~el~ is a ~headline~ or ~item~ (lists can carry tags in org-mode syntax), it calls ~collect~ on ~(:tags el)~. Then it recurses on all children returned by ~org-element-contents~.
+2. *Traversing the Subtree*:
+   - First collects tags from the parent ~headline~ itself.
+   - Then recursively visits all child elements.
+3. *Order Preservation*:
+   - Tags are accumulated using ~push~ (prepended to ~result~ in $O(1)$ time).
+   - Finally, ~(nreverse result)~ restores the exact order in which the tags were discovered during traversal.
+
+* AST Manipulation & Headline Transformation
+
+Extracting a block requires modifying the AST structure before re-serializing it into Org text. Two operations are necessary:
+1. Outdenting headlines by one level (e.g. level 3 becomes level 2).
+2. Stripping tags from all headlines.
+
+** ~journal-extract--prepare-headlines~
+
+This function performs in-place mutation on the parsed AST node or node tree.
+
+#+begin_src emacs-lisp
+(defun journal-extract--prepare-headlines (data)
+  "Prepare headlines in DATA for export.
+For every headline: reduce its level by one (never below 1) and clear
+its tags.  DATA is an org-element parse-tree node, or a list of them."
+  (cond
+   ((null data) nil)
+   ((stringp data) data)
+   ((eq (org-element-type data) 'headline)
+    (org-element-put-property data :level
+                              (max 1 (1- (org-element-property :level data))))
+    (org-element-put-property data :tags nil)
+    (dolist (child (org-element-contents data))
+      (journal-extract--prepare-headlines child))
+    data)
+   ((org-element-type data)
+    (dolist (child (org-element-contents data))
+      (journal-extract--prepare-headlines child))
+    data)
+   (t
+    (dolist (el data)
+      (journal-extract--prepare-headlines el))
+    data)))
+#+end_src
+
+*** How It Works in Detail
+The function operates recursively across different node representations in the ~org-element~ AST:
+- *~null~ or ~stringp~*: Leaves atomic non-elements untouched.
+- *~headline~*:
+  - Computes the new level using ~(max 1 (1- (org-element-property :level data)))~. The ~max 1~ safeguard ensures a headline never degrades below level 1 (which would create malformed Org syntax).
+  - Clears tags by setting ~:tags~ to ~nil~ via ~org-element-put-property~.
+  - Recurses into its children (~org-element-contents~) so deeper subheadings (e.g. level 4 -> level 3) are also shifted and stripped.
+- *Other Org Elements* (e.g. ~section~, ~paragraph~, ~plain-list~):
+  - Traverses their children to ensure any nested headlines (or structures containing them) are visited.
+- *Lists of Elements*:
+  - Iterates through each element in the list.
+- Returns the modified ~data~ structure.
+
+** ~journal-extract--extract-block~
+
+Extracts and serializes only the content underneath a date heading, excluding the date heading itself.
+
+#+begin_src emacs-lisp
+(defun journal-extract--extract-block (headline)
+  "Return HEADLINE's contents, excluding the headline line.
+Rebuilds the block from the org-element parse tree: each heading is
+outdented one level and has its tags removed."
+  (let ((children (org-element-contents headline)))
+    (if (null children)
+        ""
+      (journal-extract--prepare-headlines children)
+      (substring-no-properties
+       (string-trim (org-element-interpret-data children))))))
+#+end_src
+
+*** How It Works in Detail
+1. Obtains the inner content of the date heading via ~(org-element-contents headline)~.
+2. If there are no children (the heading is empty), returns an empty string ~""~.
+3. Passes ~children~ through ~journal-extract--prepare-headlines~ to mutate levels and strip tags.
+4. Serializes the AST back into Org text with ~org-element-interpret-data~.
+5. Applies ~string-trim~ to strip leading/trailing whitespace.
+6. Strips font-lock and buffer text properties using ~substring-no-properties~ to ensure clean plain-text strings are generated for file writing.
+
+* File Output & Source Buffer Tracking
+
+** ~journal-extract--append-to-tag-file~
+
+Handles writing extracted content into target =<TAG>.org= files.
+
+#+begin_src emacs-lisp
+(defun journal-extract--append-to-tag-file (dir tag text)
+  "Append TEXT to the file DIR/TAG.org.
+Creates the file if needed, starting it with a top-level `* TAG'
+heading.  Appends to existing content otherwise."
+  (let* ((file (expand-file-name (concat tag ".org") dir))
+         (exists (file-exists-p file))
+         (existing (when exists
+                     (with-temp-buffer
+                       (insert-file-contents file)
+                       (string-trim-right (buffer-string)))))
+         (new (if (and exists (not (string-empty-p existing)))
+                  (concat existing "\n\n" text "\n")
+                (concat "* " tag "\n\n" text "\n"))))
+    (with-temp-file file
+      (insert new))))
+#+end_src
+
+*** How It Works in Detail
+1. Resolves the destination path as ~<dir>/<tag>.org~ using ~expand-file-name~.
+2. Checks whether the file already exists:
+   - If it exists, reads its current contents into a temporary buffer and strips trailing whitespace.
+   - If existing content is present, appends ~text~ separated by a double newline (~"\n\n"~).
+   - If the file is newly created (or empty), initializes the file with a top-level headline: ~"* " tag "\n\n" text "\n"~.
+3. Writes the resulting buffer cleanly to disk using ~with-temp-file~, which guarantees atomic writes and proper buffer cleanup.
+
+** ~journal-extract--mark-copied~
+
+Tags the processed date entry in the input journal buffer so subsequent executions do not reprocess it.
+
+#+begin_src emacs-lisp
+(defun journal-extract--mark-copied (pos)
+  "Add the `:copied:' tag to the headline at POS.
+Return non-nil if the tag was actually added."
+  (save-excursion
+    (goto-char pos)
+    (let ((tags (org-get-tags nil t)))
+      (unless (member "copied" tags)
+        (org-set-tags (append tags '("copied")))
+        t))))
+#+end_src
+
+*** How It Works in Detail
+1. ~save-excursion~: Preserves the user's cursor position in the buffer.
+2. ~goto-char pos~: Jumps to the beginning of the headline at character offset ~pos~.
+3. ~(org-get-tags nil t)~: Retrieves the local tags explicitly defined on the current headline (the second argument ~t~ ignores inherited tags from parent headlines).
+4. If ="copied"= is not already present:
+   - Appends ="copied"= to the tag list using ~org-set-tags~.
+   - Returns ~t~ indicating the buffer was modified.
+5. If already tagged, returns ~nil~.
+
+* The Main Orchestrator: ~journal-extract~
+
+The interactive command ~journal-extract~ ties the whole pipeline together.
+
+#+begin_src emacs-lisp
+;;;###autoload
+(defun journal-extract (&optional input-file target-directory)
+  "Extract tagged date entries from INPUT-FILE into per-tag org files.
+
+INPUT-FILE defaults to `journal-extract-input-file' (or is prompted for
+interactively when nil).  TARGET-DIRECTORY defaults to
+`journal-extract-target-directory', or the directory containing
+INPUT-FILE.
+
+Date entries are `journal-extract-entry-level' headlines whose title
+starts with a digit.  Entries already carrying an
+`journal-extract-ignored-tags' tag are skipped.  For each remaining
+entry, tags in its subtree are collected (excluding ignored tags) and
+the entry's content -- minus its heading, outdented one level, with
+tags removed -- is appended to one <TAG>.org file per tag.  New files
+start with a top-level `* TAG' heading.  Processed entries are tagged
+`:copied:'."
+  (interactive
+   (list (or journal-extract-input-file
+             (read-file-name "Input org file: "))
+         (or journal-extract-target-directory
+             (read-directory-name "Target directory: "))))
+  (let* ((input-file (expand-file-name
+                      (or input-file journal-extract-input-file)))
+         (target-directory
+          (expand-file-name
+           (or target-directory
+               journal-extract-target-directory
+               (file-name-directory input-file))))
+         (entries nil)
+         (modified nil))
+    (unless (file-readable-p input-file)
+      (user-error "Input file is not readable: %s" input-file))
+    (unless (file-directory-p target-directory)
+      (make-directory target-directory t))
+    (with-temp-buffer
+      (insert-file-contents input-file)
+      (org-mode)
+      (let ((tree (org-element-parse-buffer)))
+        (org-element-map tree 'headline
+          (lambda (h)
+            (when (and (= (org-element-property :level h)
+                          journal-extract-entry-level)
+                       (string-match-p "\\`[0-9]"
+                                       (org-element-property :raw-value h))
+                       (not (journal-extract--ignored-p
+                             (org-element-property :tags h))))
+              (push h entries)))))
+      ;; Keep entries in document order so exported content preserves
+      ;; the original ordering.
+      (setq entries
+            (sort entries
+                  (lambda (a b)
+                    (< (org-element-property :begin a)
+                       (org-element-property :begin b)))))
+      (let (to-mark)
+        ;; Phase 1: write each tagged block to its tag file(s), in
+        ;; document order.
+        (dolist (h entries)
+          (let ((tags (journal-extract--collect-tags h)))
+            (unless (null tags)
+              (let ((block (journal-extract--extract-block h)))
+                (unless (string-empty-p block)
+                  (dolist (tag tags)
+                    (journal-extract--append-to-tag-file
+                     target-directory tag block))))
+              (push h to-mark))))
+        ;; Phase 2: tag processed entries `:copied:', bottom-to-top, so
+        ;; that editing a later entry does not shift the recorded
+        ;; positions of earlier entries.
+        (dolist (h to-mark)
+          (when (journal-extract--mark-copied
+                 (org-element-property :begin h))
+            (setq modified t))))
+      (when modified
+        (write-region (point-min) (point-max) input-file)))
+    (message "journal-extract: processed %d entries%s"
+             (length entries)
+             (if modified "" " (no changes)"))))
+#+end_src
+
+** Detailed Walkthrough of Execution Flow
+
+*** 1. Argument Normalization & Interactive Prompt
+- If invoked interactively (~M-x journal-extract~), prompts the user for ~input-file~ and ~target-directory~ only if the corresponding ~defcustom~ variables are ~nil~.
+- Expands paths via ~expand-file-name~.
+- If ~target-directory~ is unspecified, falls back to the directory containing ~input-file~.
+
+*** 2. Pre-flight Validation
+- Validates that ~input-file~ exists and is readable using ~file-readable-p~; if not, signals a clear ~user-error~.
+- Automatically ensures ~target-directory~ exists using ~(make-directory target-directory t)~.
+
+*** 3. In-Memory Parsing
+- Opens a temporary buffer with ~(with-temp-buffer ...)~.
+- Loads the file contents with ~insert-file-contents~ and activates ~org-mode~ so Org syntax tables and properties are active.
+- Parses the entire buffer AST via ~org-element-parse-buffer~.
+
+*** 4. Candidate Headline Selection
+- Scans headlines with ~org-element-map~ matching three criteria:
+  1. *Level*: ~(= (:level h) journal-extract-entry-level)~ (default 2).
+  2. *Date Title*: Matches ~"\\`[0-9]"~ (starts with a digit, e.g., =2026-09-18=).
+  3. *Not Ignored*: Does not already contain an ignored tag (e.g. =:copied:=).
+- Matches are pushed to ~entries~, then sorted in document order by comparing their ~:begin~ character offsets.
+
+*** 5. Phase 1: Block Extraction & Export
+- For each entry ~h~ in ~entries~:
+  1. Collects unique tags via ~journal-extract--collect-tags~.
+  2. If tags exist:
+     - Extracts the transformed subtree via ~journal-extract--extract-block~.
+     - If the block is non-empty, appends it to *each* tag's file via ~journal-extract--append-to-tag-file~.
+     - Pushes ~h~ onto ~to-mark~.
+
+*** 6. Phase 2: Tagging Processed Entries (Bottom-to-Top)
+- *The Invalidation Problem*: When ~org-set-tags~ modifies a headline, it inserts characters into the buffer. If we modified headlines from top to bottom, every edit would shift the byte offsets of subsequent headlines, causing their cached ~:begin~ positions to point to incorrect locations.
+- *The Solution*: Because entries were pushed onto ~to-mark~ in forward document order, iterating over ~to-mark~ processes them in *reverse* order (bottom-to-top). Edits at the bottom of the buffer change positions below earlier headlines, leaving all earlier ~:begin~ character positions completely intact!
+
+*** 7. Persistence & Reporting
+- If any entry was marked copied (~modified~ is ~t~), saves the buffer back to ~input-file~ with ~write-region~.
+- Emits an informative message via ~message~ reporting the count of processed entries.
+
+* Package Provision & Epilogue
+
+Standard Emacs Lisp package trailer:
+
+#+begin_src emacs-lisp
+(provide 'journal-extract)
+;;; journal-extract.el ends here
+#+end_src
+
+* Tangling & Verification
+
+** Tangling to Source Code
+To extract the code without overwriting ~journal-extract.el~, this document is configured to tangle to ~journal-extract-tangled.el~.
+
+Within Emacs:
+1. Open this file (~journal-extract.org~) in Emacs.
+2. Run ~M-x org-babel-tangle~ (bound to =C-c C-v t= by default).
+
+Or from the terminal using batch mode:
+#+begin_src sh
+emacs --batch -l org --eval '(org-babel-tangle-file "journal-extract.org")'
+#+end_src
+
+This produces ~journal-extract-tangled.el~ safely alongside your main ~journal-extract.el~.
+
+** Running the Test Suite
+The existing package test suite can be run with:
+#+begin_src sh
+emacs --batch -l test/journal-extract-tests.el -f ert-run-tests-batch-and-exit
+#+end_src
