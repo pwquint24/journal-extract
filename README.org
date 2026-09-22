@@ -169,6 +169,47 @@ after an entry has been processed. Add your own tags here if needed:
 (setq journal-extract-ignored-tags '("copied" "private"))
 #+END_SRC
 
+*** =journal-extract-tag-file-map=
+
+An alist that renames tags to output file names, or sends several tags to one
+file. Each entry is =(TAG . FILE-NAME)=. For example, both =:ArtHist:= and
+=:art-history:= can share =ArtHistory.org=:
+
+#+BEGIN_SRC elisp
+(setq journal-extract-tag-file-map
+      '(("ArtHist" . "ArtHistory")
+        ("art-history" . "ArtHistory")))
+#+END_SRC
+
+Tags not present in the alist keep their own file name.
+
+*** =journal-extract-preserve-date=
+
+When =t=, each exported heading that sits directly under the date entry gets
+a =:DATE:= property drawer holding the entry's full date header (for example
+=2026-09-18 Fri 16:50=). This keeps some provenance in the topic files.
+Defaults to =nil= (date headers are dropped).
+
+#+BEGIN_SRC elisp
+(setq journal-extract-preserve-date t)
+#+END_SRC
+
+Direct body text with no heading is exported unchanged and does not receive
+the date property.
+
+*** =journal-extract-dry-run=
+
+When =t=, =journal-extract= performs a dry run: it reports which entries would
+be exported, to which files, and which entries are untagged, but it writes
+nothing and marks nothing. Defaults to =nil=.
+
+#+BEGIN_SRC elisp
+(setq journal-extract-dry-run t)
+#+END_SRC
+
+You can also run a one-off dry run interactively with =M-x
+journal-extract-dry-run=.
+
 ** Input file format
 
 - The journal should have one top-level heading (for example =* Journal=). This is left untouched.
@@ -194,8 +235,9 @@ after an entry has been processed. Add your own tags here if needed:
 - *Order.* Within each tag file, entries keep their original document order.
 - *Idempotency.* Processed entries are tagged =:copied:= and skipped on later
   runs, so re-running the command is safe and makes no changes.
-- *Untagged entries.* A date entry with no tags is left in place and is not
-  marked =:copied:=, so you can tag it later and run the command again.
+- *Untagged entries.* A date entry with no exportable tags is left in place,
+  is not marked =:copied:=, and is reported with a warning, so you can tag it
+  later and run the command again.
 
 ** Example session
 
@@ -212,6 +254,60 @@ after an entry has been processed. Add your own tags here if needed:
 
 After running, =~/notes/topics/= will contain one org file per tag (created
 as needed), and processed entries in =journals.org= will be marked =:copied:=.
+
+** Backup & cleanup
+
+Once entries have been marked =:copied:=, you can archive them out of your
+journal to keep the journal itself lean.
+
+*** =journal-extract-remove-copied=
+
+Removes every =:copied:= date entry (including its contents) from the input
+file. This is destructive, so it is normally used through
+=journal-extract-archive-copied= instead.
+
+#+BEGIN_SRC elisp
+(journal-extract-remove-copied "/path/to/journals.org")
+#+END_SRC
+
+*** =journal-extract-archive-copied=
+
+First copies every =:copied:= date entry -- including its date header -- into
+a backup file, then removes them from the journal. The backup file keeps the
+journal's top-level heading (for example =* Journal=) and appends new entries
+on later runs.
+
+The backup name is derived by inserting =-backup= before the extension:
+=journals.org= becomes =journals-backup.org=.
+
+#+BEGIN_SRC elisp
+(journal-extract-archive-copied "/path/to/journals.org")
+#+END_SRC
+
+You can also pass an explicit backup file as the second argument:
+
+#+BEGIN_SRC elisp
+(journal-extract-archive-copied "/path/to/journals.org"
+                                "/path/to/archive.org")
+#+END_SRC
+
+*** =journal-extract-prune-backup=
+
+Removes date entries older than a given number of weeks from a backup file.
+This lets you keep only recent backups, or clean an archive periodically.
+Entries whose heading does not start with a parseable =YYYY-MM-DD= date are
+left untouched.
+
+#+BEGIN_SRC elisp
+;; Remove backup entries older than 52 weeks.
+(journal-extract-prune-backup 52 "/path/to/journals-backup.org")
+#+END_SRC
+
+The backup file argument is optional and defaults to the derived =-backup=
+file for =journal-extract-input-file=.
+
+All three commands are also available interactively (=M-x=) and reuse
+=journal-extract-input-file= when no file argument is given.
 
 ** Testing
 

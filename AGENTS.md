@@ -5,7 +5,8 @@ Guidance and context for working on this project. Read this before making change
 ## Project: journal-extract
 
 An Emacs Lisp utility that moves tagged entries out of a single org-mode
-"journal" file into one file per tag.
+"journal" file into one file per tag, and can archive processed (`:copied:`)
+entries to a backup file that can later be pruned by age.
 
 ### Key locations
 
@@ -53,6 +54,13 @@ An Emacs Lisp utility that moves tagged entries out of a single org-mode
 - `journal-extract-entry-level` — heading level of date entries (default 2).
 - `journal-extract-ignored-tags` — tags to skip/never export (default
   `("copied")`).
+- `journal-extract-tag-file-map` — alist mapping tags to output file base
+  names; several tags may share one file (default nil).
+- `journal-extract-preserve-date` — when non-nil, add a `:DATE:` property
+  (full date header) to each exported heading directly under the date entry
+  (default nil).
+- `journal-extract-dry-run` — when non-nil, `journal-extract` reports without
+  writing (default nil); `journal-extract-dry-run` is a one-off command.
 
 ### Clarified decisions
 
@@ -65,6 +73,28 @@ An Emacs Lisp utility that moves tagged entries out of a single org-mode
   category).
 - **Marking `:copied:`:** only mark an entry that has at least one tag to
   export, so untagged entries stay available for later re-processing.
+- **Backup & cleanup:** `journal-extract-archive-copied` copies every
+  `:copied:` date entry — date header and tags preserved — to
+  `<name>-backup.org` (created with the source's top-level heading, then
+  appended to on later runs), and then removes those entries from the input.
+  `journal-extract-prune-backup` removes backup entries older than N weeks by
+  parsing the leading `YYYY-MM-DD` of each date header; entries without a
+  parseable date are kept.
+- **Shared copy path:** tag-file export and backup both write through one
+  `journal-extract--append-to-file` helper; `journal-extract--entry-text`
+  toggles between stripping the date header/tags (export) and preserving them
+  (backup) via a `preserve-p` flag.
+- **Tag → file mapping:** `journal-extract-tag-file-map` renames tag output
+  files or merges several tags into one; duplicate destinations from a single
+  entry are deduplicated so content is written once.
+- **Date provenance:** when `journal-extract-preserve-date` is non-nil, each
+  direct child heading in an exported block gets a `:DATE:` property drawer
+  holding the full date header (e.g. `2026-09-18 Fri 16:50`); heading-less
+  direct text is left unchanged.
+- **Dry run & untagged warnings:** `journal-extract` accepts a `dry-run`
+  argument (and there is a `journal-extract-dry-run` command) that reports
+  tagged and untagged entries without writing.  A normal run warns about
+  untagged date entries.
 - **Implementation approach:** use org-element parsing/interpretation rather
   than regex manipulation of raw text.
 
@@ -76,7 +106,13 @@ An Emacs Lisp utility that moves tagged entries out of a single org-mode
   tag-stripped, content order is preserved, and processed entries are tagged
   `:copied:`.
 - Idempotent: a second run reports no changes.
-- ERT test suite in `test/` (5 tests) passes; run with
+- Backup & cleanup commands implemented: `journal-extract-remove-copied`,
+  `journal-extract-archive-copied`, and `journal-extract-prune-backup`.
+- Tag → file mapping (`journal-extract-tag-file-map`) and date provenance
+  (`journal-extract-preserve-date`) implemented.
+- Dry-run reporting (`journal-extract-dry-run`) and untagged-entry warnings
+  implemented.
+- ERT test suite in `test/` (15 tests) passes; run with
   `emacs --batch -l test/journal-extract-tests.el -f ert-run-tests-batch-and-exit`.
 
 ### Environment notes
