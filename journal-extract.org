@@ -1,10 +1,10 @@
 #+title: Journal Extract — Literate Implementation & Architecture
-#+author: Andrew Patrick
+#+author: Gemini
 #+property: header-args:emacs-lisp :tangle journal-extract-tangled.el :comments link :mkdirp yes
 
 * Overview & Architecture
 
-~journal-extract~ is an Emacs Lisp package designed to solve a fundamental tension in personal knowledge management: the trade-off between *chronological journaling* and *topical note organization*.
+~journal-extract~ is an Emacs Lisp package designed to solve a fundamental tension in personal knowledge management: the trade-off between *chronological journaling* and *topical note organisation*.
 
 ** The Problem
 
@@ -36,9 +36,9 @@ However, over months or years, notes on a single topic become scattered across h
 #+end_example
 
 Key operational characteristics:
-1. *Outdenting*: The level-2 date header (=** 2026-09-18 Fri 16:50=) is discarded; all children are shifted up one level (=***= becomes =**=, =****= becomes =***=).
+1. *Out-denting*: The level-2 date header (=** 2026-09-18 Fri 16:50=) is discarded; all children are shifted up one level (=***= becomes =**=, =****= becomes =***=).
 2. *Tag Stripping*: The topic tag (=:ArtHist:=) is removed from extracted headlines because the target file itself encapsulates that topic.
-3. *Top-level Topic Headline*: If a target tag file does not exist, it is initialized with a level-1 headline (=* ArtHist=).
+3. *Top-level Topic Headline*: If a target tag file does not exist, it is initialised with a level-1 headline (=* ArtHist=).
 4. *Source Tracking & Idempotency*: Once extracted, the date header in the journal is tagged with =:copied:=. Subsequent runs skip already-copied entries.
 5. *AST-Driven Transformation*: Instead of using error-prone regular expressions or string slicing, parsing and manipulation are performed on the Org Abstract Syntax Tree using ~org-element~.
 
@@ -107,9 +107,9 @@ The package relies on four standard libraries:
 - *~cl-lib~*: Provides Common Lisp extensions, specifically ~cl-labels~ (for defining lexically scoped local recursive functions) and ~cl-some~ (for predicate evaluation across collections).
 - *~subr-x~*: Provides string manipulation utilities such as ~string-trim~, ~string-trim-right~, and ~string-empty-p~.
 - *~org~*: Provides Org Mode core commands, headline tag inspection (~org-get-tags~), and tag mutation (~org-set-tags~).
-- *~org-element~*: Org Mode's formal syntax parser. It builds the AST (~org-element-parse-buffer~), maps nodes (~org-element-map~), accesses and modifies properties (~org-element-property~, ~org-element-put-property~), and converts AST structures back into serialized Org text (~org-element-interpret-data~).
+- *~org-element~*: Org Mode's formal syntax parser. It builds the AST (~org-element-parse-buffer~), maps nodes (~org-element-map~), accesses and modifies properties (~org-element-property~, ~org-element-put-property~), and converts AST structures back into serialised Org text (~org-element-interpret-data~).
 
-* Customization Group & User Options
+* Customisation Group & User Options
 
 Configuration variables are exposed through Emacs's ~defcustom~ facility under the ~journal-extract~ group.
 
@@ -145,7 +145,7 @@ these tags are never exported to their own file."
 ** Configuration Mechanics
 - *~journal-extract-input-file~*: When set to a file path (e.g. =~/.org/journal.org=), users do not need to select their journal path on each invocation.
 - *~journal-extract-target-directory~*: Specifies where topic files (e.g. =ArtHist.org=) will be written. If nil, defaults to the directory containing the input journal.
-- *~journal-extract-entry-level~*: Defaults to =2=, assuming =* Journal= is level 1 and =** YYYY-MM-DD...= entries are level 2. Can be customized if a user uses deeper or shallower hierarchies.
+- *~journal-extract-entry-level~*: Defaults to =2=, assuming =* Journal= is level 1 and =** YYYY-MM-DD...= entries are level 2. Can be customised if a user uses deeper or shallower hierarchies.
 - *~journal-extract-ignored-tags~*: A list of tags that should neither trigger file generation nor be preserved. Defaults to ='("copied")=.
 
 * Ignored Tag Predicates
